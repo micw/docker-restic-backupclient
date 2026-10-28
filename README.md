@@ -80,12 +80,12 @@ keep:
   yearly: 1
 
 # Caches are excluded by default. See http://bford.info/cachedir/spec.html on hot to mark a cache dir
-exclude-caches: false
+exclude-caches: true
 
 # Exclude some files from backup. See https://restic.readthedocs.io/en/latest/040_backup.html#including-and-excluding-files for details
 exclude:
-  - *.bak
-  - .cache/*
+  - "*.bak"
+  - ".cache/*"
 
 # Include files 
 # a file contains paths (with patterns) which to backup for
@@ -107,7 +107,7 @@ pre-backup-scripts:
 
 # File changed are by default done by mtime and size, inode changes are ignored.
 # set ignore-inode to false to thread files as changed if the inode is changed
-ignore-inode: false
+ignore-inode: true
 
 # Perform a dump of elasticsearch
 # * url is required
@@ -151,12 +151,66 @@ pgdump:
 # * host is required
 # * port defaults to 27017
 # * username and password are required
-# * dump_version defaults to 3. Choose between mongodump version 3.x.x and 4.x.x. Implemented to avoid failing dumps due to version mismatch.
+# * Uses the current native MongoDB Database Tools; legacy dump_version is deprecated.
 mongodump:
   host: mongodb.local
   username: root
   password: s3cr3t
-  dump_version: 4
 
 ```
 
+
+## Version 1.0.0 migration notes
+
+- `exclude-caches` and `ignore-inode` now honor YAML booleans: `true` adds the
+  corresponding restic option and `false` omits it. Both default to `true` when
+  absent, preserving the old default behavior. Before 1.0.0 explicit values were
+  accidentally inverted. Invert existing explicit values if preserving the old
+  effective behavior is desired; sample configuration now states the defaults.
+- `RESTIC_PRUNE_TIMEOUT` is truly optional. Unset, empty or `0s` means no timeout.
+- Failed database producers or gzip processes abort backup; partial SQL outputs
+  are not published. A partial restic backup (exit 3) still prevents rotation/prune.
+- The image includes restic 0.19.1 and rclone 1.75.2, based on Alpine 3.24.3.
+  Database clients follow Alpine stable security updates: MariaDB 11.8,
+  PostgreSQL 18, native MongoDB Database Tools (not an obsolete MongoDB 4.4 binary).
+  PostgreSQL dump clients must be at least the server major version; test restores
+  against the actual target version. Legacy `dump_version: 3` / `4` selectors map
+  to the installed MongoDB tools and emit a deprecation warning; old MongoDB server
+  compatibility is not guaranteed.
+- tini forwards signals to the child process group. In Kubernetes, override `args`
+  rather than `command` so the image entrypoint is retained.
+- The historical forced S3 ListObjects-v1 workaround was removed. Modern restic
+  uses the backend's default behavior, including for non-S3 repositories.
+
+### WebDAV over HTTPS via rclone
+
+No additional container, SSH or rclone configuration file is needed. Configure
+an environment-based rclone remote (the name `STORAGEBOX` matches `storagebox`):
+
+```text
+RESTIC_REPOSITORY=rclone:storagebox:restic
+RCLONE_CONFIG_STORAGEBOX_TYPE=webdav
+RCLONE_CONFIG_STORAGEBOX_URL=https://your-subaccount.your-storagebox.de/
+RCLONE_CONFIG_STORAGEBOX_VENDOR=other
+RCLONE_CONFIG_STORAGEBOX_USER=your-subaccount
+RCLONE_CONFIG_STORAGEBOX_PASS=<output of rclone obscure>
+```
+
+Pass the password through standard input to `rclone obscure -` and protect
+it as a secret: obscuring is reversible, not encryption. Repository encryption
+still uses `RESTIC_PASSWORD`. The WebDAV URL is relative to the account root; do
+not repeat the provider-side subaccount directory in the URL.
+
+### Testing
+
+```sh
+docker build -t restic-backupclient:test .
+docker run --rm -v "$PWD:/tests:ro" -e PYTHONPATH=/scripts \
+  restic-backupclient:test python3 -m unittest discover -s /tests/test -v
+python3 test/integration.py restic-backupclient:test
+python3 test/integration_webdav.py restic-backupclient:test
+python3 test/integration_databases.py restic-backupclient:test
+```
+
+Integration tests use isolated containers and synthetic data, never production
+repositories or credentials. The WebDAV test uses rclone's own local WebDAV server.

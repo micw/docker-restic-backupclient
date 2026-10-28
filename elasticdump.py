@@ -7,19 +7,28 @@ import os.path
 import subprocess
 import urllib
 import re
+import tempfile
 
 def es_list_indices(url,username,password):
 	if username is not None and password is not None:
 		auth=(username,password)
 	else:
 		auth=None
-	response=requests.get('%s/_cat/indices?v&format=json'%url,auth=auth)
+	try:
+		response=requests.get('%s/_cat/indices?v&format=json'%url,auth=auth,timeout=60)
+	except requests.RequestException:
+		log.error('Unable to list elasticsearch indices.')
+		return None
 	if (response.status_code != 200):
 		log.error("Unable to list elasticsearch indices: %s"%response.text)
 		return None
 	result=[]
-	for indexData in response.json():
-		result.append(indexData['index'])
+	try:
+		for indexData in response.json():
+			result.append(indexData['index'])
+	except (ValueError, KeyError, TypeError):
+		log.error('Invalid elasticsearch index listing.')
+		return None
 	return result
 
 def es_dump_with_config(target_dir,config):
@@ -41,11 +50,14 @@ def es_dump(target_dir,url,username,password,include_patterns,exclude_patterns):
 	if username is not None and password is not None:
 		urlparts=urllib.parse.urlparse(url)
 		url=urlparts._replace(netloc='%s:%s@%s'%(
-			username,
-			urllib.parse.quote(password),
+			urllib.parse.quote(username, safe=''),
+			urllib.parse.quote(password, safe=''),
 			urlparts.netloc)).geturl()
 
 	for index in indices:
+		if '/' in index or '\x00' in index:
+			log.error('Unsafe index name for dump filename.')
+			return False
 		if include_patterns:
 			included=False
 			for p in include_patterns:
@@ -71,13 +83,13 @@ def es_dump(target_dir,url,username,password,include_patterns,exclude_patterns):
 		try:
 			for datatype in ['alias','mapping','data']:
 				log.info('Elasticsearch: Dumping %s for %s'%(datatype,index))
-				subprocess.check_call([
-					'elasticdump',
-					'--input','%s/%s'%(url,index),
-					'--type',datatype,
-					'--output',os.path.join(target_dir,'%s__%s.json'%(index,datatype))
-					])
-		except subprocess.CalledProcessError as e:
+				with tempfile.TemporaryDirectory(prefix='.elasticdump-', dir=target_dir) as staging:
+					temporary = os.path.join(staging, 'dump.json')
+					subprocess.check_call([
+						'elasticdump', '--input', '%s/%s'%(url,index),
+						'--type', datatype, '--output', temporary])
+					os.replace(temporary, os.path.join(target_dir, '%s__%s.json'%(index,datatype)))
+		except (subprocess.CalledProcessError, OSError) as e:
 			log.error('Elasticsearch dump failed.')
 			return False
 	return True

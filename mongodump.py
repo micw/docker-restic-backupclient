@@ -22,28 +22,20 @@ def mongodump_with_config(target_dir,config):
 
 def mongodump(target_dir,host,port,username,password,dump_version):
 	log.info('Setting binary.')
-	if dump_version == 3:
+	if dump_version in (3, 4):
 		binary = "mongodump"
-	elif dump_version == 4:
-		binary = "mongodump_rc"
+		log.warning('dump_version is deprecated; using the installed MongoDB Database Tools.')
 	else:
 		log.error('Couldnt set binary.')
 		return False
 
 	try:
 		log.info('Dumping mongodb at %s'%host)
-		subprocess.check_call("".join([
-			'nice -n 19 '
-			'ionice -c3 '
-			'%s '%binary,
-			'--host=%s '%host,
-			'--port=%s '%port,
-			'--username=%s '%username,
-			'--password=%s '%password,
-			'--forceTableScan ',
-			'-o %s '%target_dir
-			]),shell=True)
-	except subprocess.CalledProcessError as e:
+		subprocess.check_call([
+			'nice', '-n', '19', 'ionice', '-c3', binary,
+			'--host=%s'%host, '--port=%s'%port, '--username=%s'%username,
+			'--password=%s'%password, '--forceTableScan', '-o', target_dir])
+	except (subprocess.CalledProcessError, OSError) as e:
 		log.error('Mongodump failed.')
 		return False
 	return True
@@ -58,7 +50,7 @@ def main():
 	parser.add_argument('--port', metavar='host', type=int, help='Mongodb port', default=27017)
 	parser.add_argument('-u','--username', metavar='username', type=str, help='Mongodb username', required=True)
 	parser.add_argument('-p','--password', metavar='password', type=str, help='Mongodb password', required=True)
-	parser.add_argument('--dump_version', metavar='3 or 4', type=int, help='Choose between mongodump version 3.x.x and 4.x.x. Implemented to avoid failing dumps due to version mismatch. Default 3.', default=3)
+	parser.add_argument('--dump_version', metavar='3 or 4', type=int, help='Deprecated compatibility selector (3 or 4); both use the installed MongoDB Database Tools.', default=3)
 	args=parser.parse_args()
 	if not os.path.isdir(args.target_dir):
 		print('No such directory: %s'%args.target_dir)

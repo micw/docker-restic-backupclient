@@ -21,12 +21,11 @@ def fail(msg,args):
 	quit(1)
 
 def resolve_env_placeholders(template):
-	origTemplate = template
 	resolveDepth = 0
 	while resolveDepth < 10:
 		resolveDepth += 1
 		changed = False
-		for placeholder, key in re.findall('(\$\(([a-zA-Z0-9_-]+)\))', template):
+		for placeholder, key in re.findall(r'(\$\(([a-zA-Z0-9_-]+)\))', template):
 			if key in environ:
 				template = template.replace(placeholder, environ[key])
 				changed = True
@@ -77,7 +76,12 @@ def load_config():
 	try:
 		log.info('Using extra config from %s'%config_file)
 		with open(config_file,'r') as config:
-			return yaml.safe_load(config)
+			loaded = yaml.safe_load(config)
+			if loaded is None:
+				return {}
+			if not isinstance(loaded, dict):
+				raise ValueError("Backup config must be a mapping")
+			return loaded
 	except:
 		log.exception('Unable to read config file %s'%config_file)
 		return None
@@ -121,10 +125,12 @@ def init_restic_repo():
 		else:
 			log.error('Initializing repository failed: %s'%output)
 			return False
+	return True
 
 def run_backup(prune=False):
 	backup_root=get_env('BACKUP_ROOT')
-	init_restic_repo()
+	if not init_restic_repo():
+		return False
 
 	log.info('Unlocking repository')
 	subprocess.check_call(['restic','unlock'],stderr=subprocess.STDOUT)
@@ -216,11 +222,11 @@ def run_backup(prune=False):
 	]
 
 	# exclude caches (http://bford.info/cachedir/spec.html)
-	if not ('exclude-caches' in config and bool(config['exclude-caches'])):
+	if config.get('exclude-caches', True):
 		cmd.append('--exclude-caches')
 
 	# ignore inode for changed-file checks (default is true)
-	if not ('ignore-inode' in config and bool(config['ignore-inode'])):
+	if config.get('ignore-inode', True):
 		cmd.append('--ignore-inode')
 
 	# set cacheDir if not default one should be used
@@ -275,7 +281,8 @@ def clean_old_backups(config=None):
 	if config is None:
 		# direct call, init first
 		config=load_config()
-		init_restic_repo()
+		if not init_restic_repo():
+			return False
 
 	if config is None:
 		return False
@@ -294,7 +301,7 @@ def clean_old_backups(config=None):
 				cleanup_command+=['--keep-%s'%keep_type,str(keep[keep_type])]
 		if not keep_is_valid:
 			log.warning('Keep configuration is invalid - not deleting old backups.')
-			return
+			return False
 	else:
 		keep_is_valid=False
 		for keep_type in ['last','hourly','daily','weekly','monthly','yearly']:
@@ -304,7 +311,7 @@ def clean_old_backups(config=None):
 				cleanup_command+=['--keep-%s'%keep_type,str(environ[keep_env])]
 		if not keep_is_valid:
 			log.warning('Rotation not configured. Keeping backups forever.')
-			return
+			return True
 
 	log.info('Unlocking repository')
 	subprocess.check_call(['restic','unlock'],stderr=subprocess.STDOUT)
@@ -319,9 +326,9 @@ def clean_old_backups(config=None):
 	return True
 
 def get_prune_timeout():
-	prune_timeout=get_env('RESTIC_PRUNE_TIMEOUT',UNDEFINED)
+	prune_timeout=get_env('RESTIC_PRUNE_TIMEOUT',None)
 	if (prune_timeout is None):
-		return none
+		return None
 
 	# https://stackoverflow.com/a/4628148/1471588
 	regex = re.compile(r'^((?P<days>\d+?)d)?((?P<hours>\d+?)h)?((?P<minutes>\d+?)m)?((?P<seconds>\d+?)s)?$')
@@ -343,7 +350,8 @@ def prune_repository(config=None):
 	if config is None:
 		# direct call, init first
 		config=load_config()
-		init_restic_repo()
+		if not init_restic_repo():
+			return False
 
 	if config is None:
 		return False
@@ -352,8 +360,7 @@ def prune_repository(config=None):
 
 	prune_command=[
 		'restic',
-		'prune',
-		'-o','s3.list-objects-v1=true' # See https://github.com/restic/restic/issues/3761
+		'prune'
 	]
 
 	log.info('Unlocking repository')

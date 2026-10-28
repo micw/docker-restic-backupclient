@@ -8,7 +8,7 @@ keep:
   yearly: 1
 
 # Caches are excluded by default. See http://bford.info/cachedir/spec.html on hot to mark a cache dir
-exclude-caches: false
+exclude-caches: true
 
 # include files from file content. See https://restic.readthedocs.io/en/latest/040_backup.html#including-files
 include-from:
@@ -32,7 +32,7 @@ exclude:
 
 # File changed are by default done by mtime and size, inode changes are ignored.
 # set ignore-inode to false to thread files as changed if the inode is changed
-ignore-inode: false
+ignore-inode: true
 
 # Perform a dump of elasticsearch
 # * url is required
