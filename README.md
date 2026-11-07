@@ -160,6 +160,21 @@ mongodump:
 ```
 
 
+## Version 1.2.0: dependency refresh
+
+- Alpine 3.24.3 -> 3.24.4 and rclone 1.75.2 -> 1.76.0, both pinned by
+  verified multiarchitecture image digests.
+- Checked stable upstream releases on 2026-11-07: restic 0.19.1,
+  talosctl 1.14.5, elasticdump 6.125.1 and crontab 1.0.5 are unchanged.
+- APK tools follow the same Alpine v3.24 repositories; database client major
+  lines remain MariaDB 11.8, PostgreSQL 18 and native MongoDB Database Tools.
+- No configuration schema or backup behavior change from corrected 1.1.0;
+  automatic plain `restic unlock` remains intentional crash recovery.
+- Upstream Alpine release metadata currently lists community support ending
+  2026-11-01 despite publishing this newer stable patch. Reassess the support
+  window for community packages (notably npm/MongoDB tools); this release does
+  not silently switch to edge or an unpublished next Alpine branch.
+
 ## Version 1.1.0: required sources and native snapshots
 
 ```yaml
