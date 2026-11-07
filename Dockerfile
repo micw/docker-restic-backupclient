@@ -1,5 +1,6 @@
 FROM restic/restic:0.19.1@sha256:136600b6ff6843d61d355f7f71f460a166429f35de6fd11b568fece3c9a4d510 AS restic
 FROM rclone/rclone:1.75.2@sha256:2687085f718d3c628f7fdfb77c52a1d344332aed543110bb88088f2c70d43eb5 AS rclone
+FROM ghcr.io/siderolabs/talosctl:v1.14.5@sha256:0b852e35c1f513ee5eacc22183d6193486012420569fde39fcd5260c51938443 AS talosctl
 FROM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 
 # Native Alpine database clients avoid copying obsolete glibc MongoDB binaries.
@@ -12,6 +13,7 @@ RUN apk add --no-cache \
     npm install --global elasticdump@6.125.1 && \
     npm cache clean --force
 
+COPY --from=talosctl /talosctl /usr/local/bin/talosctl
 COPY --from=restic /usr/bin/restic /usr/bin/restic
 COPY --from=rclone /usr/local/bin/rclone /usr/local/bin/rclone
 ENV PATH="/opt/venv/bin:${PATH}" \

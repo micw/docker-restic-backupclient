@@ -160,6 +160,82 @@ mongodump:
 ```
 
 
+## Version 1.1.0: required sources and native snapshots
+
+```yaml
+# Existing installations retain automatic init unless explicitly disabled.
+init-repository: false
+required-sources:
+  - path: /backup/daten
+    marker: .backup-source  # optional, relative regular file within source
+sqlite:
+  timeout: 60  # positive seconds per database, including busy retries
+  databases:
+    - name: ha
+      path: /backup/daten/home-assistant/home-assistant_v2.db
+      exclude-source: true  # default; excludes exact DB and -wal/-shm/-journal
+talos-etcd:
+  talosconfig: /credentials/talosconfig
+  endpoints: [192.0.2.10]
+  nodes: [192.0.2.10]
+  timeout: 300
+```
+
+All configured producers are required. Missing required directories/markers abort
+before repository init or any restic command; the client never creates them.
+Markers are optional, have no content requirement, and must resolve to regular
+files inside their source (symlinks escaping it are rejected). Mount sources
+read-only where possible and provision markers externally.
+
+SQLite uses Python's online backup API with a read-only source connection,
+including committed WAL data. Outputs are `/backup/sqlite/<name>.db`; names must
+be unique ASCII letters, digits, underscores or hyphens. Each copy passes
+`quick_check` and switches **only its destination** to DELETE journal mode.
+The timeout bounds the online-copy/busy-retry phase; validation and checksumming
+are additional work. Published database files have mode 0600.
+Source files are excluded only after all producers succeed. `exclude-source:
+false` keeps the live files too (not a substitute for the consistent copy).
+
+Talos uses pinned official talosctl 1.14.5 to produce
+`/backup/talos-etcd/snapshot.db`; the client independently verifies the trailing
+SHA-256 checksum against the payload and rejects truncated/misaligned outputs.
+Use one cluster per client and exactly one selected control-plane node. Mount
+externally provisioned dedicated snapshot-only Talos credentials from a Secret
+at `/credentials/talosconfig`, outside `/backup`; never put credentials in the
+backup inputs (including `include-from`). This client does not generate or copy
+credentials. Producer directories must not overlap sources or credentials.
+
+Both producers remove their owned old output before attempting a new snapshot,
+stage fresh outputs, and atomically publish complete directories with SHA-256/size
+manifests (no credentials). Failed/empty snapshots, timeouts and interrupted
+staging never reach restic; stale dumps are not reused. With `include-from`,
+explicitly include producer output directories as well as regular sources.
+Existing unowned output directories and mountpoints are rejected, not removed.
+Ownership is recorded by `.backup-client-managed` in each published output;
+never create that internal marker in user-data directories. Reserved staging
+under `/backup/.backup-client-staging` is always excluded, so SIGKILL leftovers
+cannot enter subsequent backups; they may be removed manually while idle.
+Do not store backup sources in this reserved staging directory.
+A manifest checksum detects changes; it is not a replacement for restore tests.
+
+`run --no-rotate` is backup-only and also disables prune. `run --no-prune`
+still rotates but skips prune. Backup, rotate and prune retain the intentional
+automatic `restic unlock` before their repository operation, so stale locks left
+by a crash do not block subsequent runs. This is plain `unlock`, never
+`unlock --remove-all`; restic retains its normal stale-lock detection.
+`init-repository: false` disables automatic init for run/rotate/prune; default
+`true` preserves existing installations. Repository initialization occurs only
+after all producers succeed. Restic exit 3 still blocks rotation and pruning.
+
+Local unit tests (including a real SQLite WAL snapshot/restore and mocked Talos
+success/failure/timeout/interruption tests):
+
+```sh
+python3 -m venv /tmp/restic-client-tests
+/tmp/restic-client-tests/bin/pip install crontab==1.0.5 PyYAML requests
+/tmp/restic-client-tests/bin/python -m unittest discover -s test -v
+```
+
 ## Version 1.0.0 migration notes
 
 - `exclude-caches` and `ignore-inode` now honor YAML booleans: `true` adds the

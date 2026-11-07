@@ -34,7 +34,7 @@ class BackupClientTests(unittest.TestCase):
                         self.assertEqual(flag in args, setting is not False)
 
     def test_failed_init_aborts_before_backup(self):
-        with patch.dict(os.environ, {"BACKUP_ROOT": "/unused"}), patch.object(client, "init_restic_repo", return_value=False), patch.object(client.subprocess, "check_call") as call:
+        with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, {"BACKUP_ROOT": root}), patch.object(client, "init_restic_repo", return_value=False), patch.object(client.subprocess, "check_call") as call:
             self.assertFalse(client.run_backup())
             call.assert_not_called()
 
@@ -56,6 +56,18 @@ class BackupClientTests(unittest.TestCase):
             with patch.object(client.subprocess, "check_call", side_effect=invoke):
                 self.assertFalse(client.run_backup())
                 rotate.assert_not_called()
+
+    def test_rotation_unlocks_before_forget(self):
+        with patch.object(client.subprocess, "check_call") as command:
+            self.assertTrue(client.clean_old_backups({"keep": {"last": 2}}))
+            self.assertEqual(command.call_args_list[0].args[0], ["restic", "unlock"])
+            self.assertEqual(command.call_args_list[1].args[0], ["restic", "forget", "--keep-last", "2"])
+
+    def test_prune_unlocks_before_prune(self):
+        with patch.dict(os.environ, {}, clear=True), patch.object(client.subprocess, "check_call") as command:
+            self.assertTrue(client.prune_repository({}))
+            self.assertEqual(command.call_args_list[0].args[0], ["restic", "unlock"])
+            self.assertEqual(command.call_args_list[1].args[0], ["restic", "prune"])
 
     def test_empty_config_file(self):
         with tempfile.NamedTemporaryFile() as config, patch.dict(os.environ, {"BACKUP_CONFIG": config.name}):

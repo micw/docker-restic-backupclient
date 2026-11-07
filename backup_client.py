@@ -15,6 +15,8 @@ import elasticdump
 import mysqldump
 import pgdump
 import mongodump
+import snapshot_producers
+import signal
 
 def fail(msg,args):
 	log.error(msg,args)
@@ -127,16 +129,15 @@ def init_restic_repo():
 			return False
 	return True
 
-def run_backup(prune=False):
+def run_backup(prune=False, rotate=True):
 	backup_root=get_env('BACKUP_ROOT')
-	if not init_restic_repo():
-		return False
-
-	log.info('Unlocking repository')
-	subprocess.check_call(['restic','unlock'],stderr=subprocess.STDOUT)
-
 	config=load_config()
 	if config is None:
+		return False
+	try:
+		snapshot_producers.validate_required_sources(config)
+	except (ValueError, KeyError, TypeError, OSError):
+		log.exception('Required source validation failed')
 		return False
 
 	if not (os.path.exists(backup_root)):
@@ -213,6 +214,19 @@ def run_backup(prune=False):
 			log.error('Mongodump failed. Backup canceled.')
 			return False
 
+	try:
+		# Recheck after pre-backup scripts and legacy producers, before repository access.
+		snapshot_producers.validate_required_sources(config)
+		producer_excludes = snapshot_producers.produce(backup_root, config)
+	except Exception:
+		log.exception('Snapshot producer failed; backup canceled')
+		return False
+	if config.get('init-repository', True) and not init_restic_repo():
+		return False
+
+	log.info('Unlocking repository')
+	subprocess.check_call(['restic','unlock'],stderr=subprocess.STDOUT)
+
 	cmd=[
 		'nice','-n19',
 		'ionice','-c3',
@@ -255,6 +269,10 @@ def run_backup(prune=False):
 			cmd.append('--exclude')
 			cmd.append(exclude)
 
+	# Escape restic glob metacharacters so producer exclusions match exact paths.
+	for path in producer_excludes:
+		cmd.extend(['--exclude', ''.join('[' + c + ']' if c in '*?[' else c for c in path)])
+
 	# if include is set no backuproot should given as argument
 	if 'include-from' not in config:
 		cmd.append(backup_root)
@@ -268,11 +286,11 @@ def run_backup(prune=False):
 			log.info('Backup failed.')
 			return False
 
-	if not clean_old_backups(config):
+	if rotate and not clean_old_backups(config):
 		return False
 
-	if prune:
-		return prune_repository()
+	if prune and rotate:
+		return prune_repository(config)
 	
 	return True
 
@@ -281,7 +299,7 @@ def clean_old_backups(config=None):
 	if config is None:
 		# direct call, init first
 		config=load_config()
-		if not init_restic_repo():
+		if config is not None and config.get('init-repository', True) and not init_restic_repo():
 			return False
 
 	if config is None:
@@ -350,7 +368,7 @@ def prune_repository(config=None):
 	if config is None:
 		# direct call, init first
 		config=load_config()
-		if not init_restic_repo():
+		if config is not None and config.get('init-repository', True) and not init_restic_repo():
 			return False
 
 	if config is None:
@@ -363,9 +381,9 @@ def prune_repository(config=None):
 		'prune'
 	]
 
+
 	log.info('Unlocking repository')
 	subprocess.check_call(['restic','unlock'],stderr=subprocess.STDOUT)
-
 	if prune_timeout is None:
 		log.info('Pruning repository')
 	else:
@@ -407,15 +425,23 @@ def schedule_backup(crontab,prunecron=None):
 				prune_repository()
 			else:
 				run_backup(prunecron is None)
-		except:
+		except Exception:
 			log.exception("Something went unexpectedly wrong!")
 
+def handle_termination(signum, frame):
+	# Unwind producer finally blocks; tini also signals the child process group.
+	raise SystemExit(128 + signum)
+
+
 def main():
+	signal.signal(signal.SIGTERM, handle_termination)
 	log.basicConfig(level=log.INFO,format='%(asctime)s %(levelname)7s: %(message)s')
 	parser = argparse.ArgumentParser(description='Perform backups with restic')
 	subparsers = parser.add_subparsers(help='sub-command help',dest='cmd')
 	subparsers.required = True
 	parser_run = subparsers.add_parser('run', help='Run a backup now and rotate+prune afterwards.')
+	parser_run.add_argument('--no-rotate', action='store_true', help='Backup only; also disables prune')
+	parser_run.add_argument('--no-prune', action='store_true', help='Skip prune after backup and rotation')
 	parser_run = subparsers.add_parser('rotate', help='Rotate backups now.')
 	parser_run = subparsers.add_parser('prune', help='Prune the repository now')
 	parser_schedule = subparsers.add_parser('schedule', help='Schedule backups.')
@@ -433,7 +459,7 @@ def main():
 	get_prune_timeout()
 
 	if args.cmd=='run':
-		result=run_backup(True)
+		result=run_backup(not args.no_prune, rotate=not args.no_rotate)
 		if not result:
 			quit(1)
 	elif args.cmd=='rotate':

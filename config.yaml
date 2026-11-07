@@ -1,3 +1,20 @@
+# Version 1.1.0 optional fail-closed inputs and native snapshots:
+# init-repository: false  # default true for compatibility
+# required-sources:
+#   - path: /backup/daten
+#     marker: .backup-source  # optional; client never creates this file
+# sqlite:
+#   timeout: 60
+#   databases:
+#     - name: ha
+#       path: /backup/daten/home-assistant/home-assistant_v2.db
+#       exclude-source: true
+# talos-etcd:
+#   talosconfig: /credentials/talosconfig  # mount outside BACKUP_ROOT
+#   endpoints: [192.0.2.10]
+#   nodes: [192.0.2.10]
+#   timeout: 300
+
 # if set, old backups will be deleted according to the rules below.
 # At least one of [last, daily, weekly, monthly, yearly] needs to be set to make this work
 keep:
